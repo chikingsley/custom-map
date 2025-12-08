@@ -1,0 +1,60 @@
+@import "./styles/globals.css";
+
+@layer base {
+  :root {
+    @apply font-sans;
+  }
+
+  body {
+    @apply min-w-[320px] min-h-screen m-0 bg-background text-foreground overflow-hidden;
+  }
+
+  #root {
+    @apply h-screen w-screen;
+  }
+}
+
+/* Custom scrollbar for panels */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Drag and drop styles */
+.drop-zone {
+  @apply border-2 border-dashed border-muted-foreground/30 rounded-lg transition-all duration-200;
+}
+
+.drop-zone.dragging {
+  @apply border-primary bg-primary/5 scale-[1.02];
+}
+
+/* Pulse animation for AI thinking */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.ai-thinking-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.ai-thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.ai-thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
