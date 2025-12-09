@@ -866,20 +866,46 @@ const server = serve({
           const { roadName, intersectionPoint, city, state, radiusMeters } =
             await req.json();
 
-          if (!(roadName && intersectionPoint?.lat && intersectionPoint?.lng)) {
+          if (!roadName) {
             return Response.json(
-              { error: "roadName and intersectionPoint (lat, lng) required" },
+              { error: "roadName required" },
               { status: 400 }
             );
           }
 
-          // Use the search-based approach for better results
+          // Strategy: Try to find the road in multiple ways
+          let nearPoint = intersectionPoint;
+          const searchRadius = radiusMeters || 1000;
+
+          // If no intersection point provided, or we want to find the road itself,
+          // geocode the road name directly
+          if (!(nearPoint?.lat && nearPoint?.lng)) {
+            const roadQuery =
+              `${roadName}, ${city || ""} ${state || ""}`.trim();
+            console.log(`[Roads] Geocoding road: "${roadQuery}"`);
+            const roadGeocode = await geocodeAddress(roadQuery);
+            if (roadGeocode) {
+              nearPoint = { lat: roadGeocode.lat, lng: roadGeocode.lng };
+              console.log(
+                `[Roads] Road geocoded to: ${nearPoint.lat}, ${nearPoint.lng}`
+              );
+            }
+          }
+
+          if (!(nearPoint?.lat && nearPoint?.lng)) {
+            return Response.json(
+              { error: `Could not locate road: ${roadName}` },
+              { status: 404 }
+            );
+          }
+
+          // Get road geometry using directions API
           const points = await getRoadGeometryBySearch({
             roadName,
-            nearPoint: intersectionPoint,
+            nearPoint,
             city: city || "",
             state: state || "",
-            searchRadiusMeters: radiusMeters || 500,
+            searchRadiusMeters: searchRadius,
           });
 
           if (!points || points.length === 0) {

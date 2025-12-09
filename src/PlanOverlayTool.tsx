@@ -866,43 +866,60 @@ export function PlanOverlayTool() {
               `Intersection geocoded: ${intersectionData.formattedAddress}`
             );
 
-            // Fetch road geometry for highlighting
-            setCurrentStatus("Fetching road geometry for highlighting...");
-            const roadColors = ["#ef4444", "#3b82f6", "#22c55e", "#f59e0b"];
-            const roadGeometryPromises = [
-              firstIntersection.road1,
-              firstIntersection.road2,
-            ].map(async (roadName, index) => {
-              try {
-                const res = await fetch("/api/roads/geometry", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    roadName,
-                    intersectionPoint: {
-                      lat: intersectionData.lat,
-                      lng: intersectionData.lng,
-                    },
-                    city: extracted.city,
-                    state: extracted.state || "",
-                    radiusMeters: 500,
-                  }),
-                });
+            // Fetch road geometry for ALL roads found (not just intersection roads)
+            setCurrentStatus("Fetching road geometry for all roads...");
+            const roadColors = [
+              "#ef4444", // red
+              "#3b82f6", // blue
+              "#22c55e", // green
+              "#f59e0b", // amber
+              "#8b5cf6", // purple
+              "#ec4899", // pink
+              "#14b8a6", // teal
+              "#f97316", // orange
+            ];
 
-                if (res.ok) {
-                  const data: { points: Array<{ lat: number; lng: number }> } =
-                    await res.json();
-                  return {
-                    roadName,
-                    points: data.points,
-                    color: roadColors[index % roadColors.length],
-                  } as RoadPolylineData;
+            // Get unique road names from extracted.roads
+            const allRoadNames = [
+              ...new Set(extracted.roads?.map((r) => r.name) ?? []),
+            ];
+
+            console.log("[Roads] Drawing all roads:", allRoadNames);
+
+            const roadGeometryPromises = allRoadNames.map(
+              async (roadName, index) => {
+                try {
+                  const res = await fetch("/api/roads/geometry", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      roadName,
+                      intersectionPoint: {
+                        lat: intersectionData.lat,
+                        lng: intersectionData.lng,
+                      },
+                      city: extracted.city,
+                      state: extracted.state || "",
+                      radiusMeters: 1000, // larger radius to catch more of each road
+                    }),
+                  });
+
+                  if (res.ok) {
+                    const data: {
+                      points: Array<{ lat: number; lng: number }>;
+                    } = await res.json();
+                    return {
+                      roadName,
+                      points: data.points,
+                      color: roadColors[index % roadColors.length],
+                    } as RoadPolylineData;
+                  }
+                  return null;
+                } catch {
+                  return null;
                 }
-                return null;
-              } catch {
-                return null;
               }
-            });
+            );
 
             const roadResults = await Promise.all(roadGeometryPromises);
             const validRoads = roadResults.filter(
@@ -993,7 +1010,14 @@ export function PlanOverlayTool() {
         updateStep("position", "active");
         setCurrentStatus("Calculating overlay position...");
 
-        const sizeMeters = extracted.estimatedSizeMeters || 100;
+        // Clamp size to reasonable bounds (10m min, 500m max for typical sites)
+        const rawSize = extracted.estimatedSizeMeters || 100;
+        const sizeMeters = Math.max(10, Math.min(500, rawSize));
+        if (rawSize !== sizeMeters) {
+          console.log(
+            `[Frontend] Clamped size from ${rawSize}m to ${sizeMeters}m`
+          );
+        }
         let boundsData: { bounds: LatLngBoundsLiteral };
 
         if (useCornerBased && cornerPosition) {
