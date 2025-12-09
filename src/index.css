@@ -43,8 +43,13 @@
 
 /* Pulse animation for AI thinking */
 @keyframes pulse-dot {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .ai-thinking-dot {

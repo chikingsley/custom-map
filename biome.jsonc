@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["ultracite/core", "ultracite/react"],
+  "javascript": {
+    "globals": ["Bun", "google"]
+  },
+  "linter": {
+    "rules": {
+      "style": {
+        "useFilenamingConvention": "off",
+        "noNonNullAssertion": "off",
+        "noNestedTernary": "warn"
+      },
+      "suspicious": {
+        "noAlert": "warn",
+        "noAssignInExpressions": "off",
+        "useAwait": "warn",
+        "noExplicitAny": "warn"
+      },
+      "a11y": {
+        "noStaticElementInteractions": "off",
+        "noNoninteractiveElementInteractions": "off",
+        "useKeyWithClickEvents": "off",
+        "useSemanticElements": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off"
+      },
+      "performance": {
+        "noNamespaceImport": "off",
+        "useTopLevelRegex": "warn"
+      },
+      "correctness": {
+        "useExhaustiveDependencies": "warn",
+        "noUndeclaredVariables": "warn"
+      }
+    }
+  }
+}

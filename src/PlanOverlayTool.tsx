@@ -1,974 +1,1812 @@
-import { APIProvider, Map, Marker, useMap } from "@vis.gl/react-google-maps";
-import html2canvas from "html2canvas";
 import {
-	Brain,
-	CheckCircle2,
-	ChevronDown,
-	ChevronLeft,
-	ChevronRight,
-	ChevronUp,
-	Eye,
-	EyeOff,
-	Loader2,
-	MapPin,
-	Maximize2,
-	Move,
-	RotateCcw,
-	Sparkles,
-	Upload,
-	XCircle,
+  APIProvider,
+  Map as GoogleMap,
+  Marker,
+  useMap,
+} from "@vis.gl/react-google-maps";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Loader2,
+  MapPin,
+  Maximize2,
+  Move,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Upload,
+  XCircle,
 } from "lucide-react";
-import * as pdfjsLib from "pdfjs-dist";
+import * as pdfjs from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 
+// PDF.js worker setup
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf-worker.min.mjs";
+
+// Types
 type LatLngLiteral = { lat: number; lng: number };
 type LatLngBoundsLiteral = {
-	north: number;
-	south: number;
-	east: number;
-	west: number;
+  north: number;
+  south: number;
+  east: number;
+  west: number;
 };
 
-type AIMessage = {
-	role: "user" | "assistant" | "system";
-	content: string;
-	timestamp: Date;
-	bounds?: LatLngBoundsLiteral;
-	thinking?: string;
-	isStreaming?: boolean;
+// Road/street extracted from the plan
+type ExtractedRoad = {
+  name: string;
+  direction: "north" | "south" | "east" | "west" | "unknown";
+  isPrimary: boolean;
 };
 
-// PDF.js worker setup
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf-worker.min.mjs";
+// Intersection point where roads meet
+type ExtractedIntersection = {
+  road1: string;
+  road2: string;
+  cornerPosition:
+    | "northwest"
+    | "northeast"
+    | "southwest"
+    | "southeast"
+    | "unknown";
+};
 
-async function pdfFirstPageToDataUrl(file: File, scale = 2): Promise<string> {
-	const arrayBuffer = await file.arrayBuffer();
-	const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-	const page = await doc.getPage(1);
-	const viewport = page.getViewport({ scale });
-	const canvas = document.createElement("canvas");
-	const context = canvas.getContext("2d");
-	if (!context) throw new Error("Canvas 2D context unavailable");
-	canvas.height = viewport.height;
-	canvas.width = viewport.width;
-	await page.render({ canvasContext: context, viewport, canvas }).promise;
-	return canvas.toDataURL("image/png");
+type ExtractedPlanData = {
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  streetNames: string[];
+  landmarks: string[];
+  scaleInfo: string | null;
+  northArrowDegrees: number | null;
+  estimatedSizeMeters: number | null;
+  confidence: number;
+  // Enhanced road/intersection data
+  roads: ExtractedRoad[];
+  intersections: ExtractedIntersection[];
+  siteShape:
+    | "rectangular"
+    | "irregular"
+    | "L-shaped"
+    | "triangular"
+    | "unknown";
+  siteBoundary: {
+    northRoad: string | null;
+    southRoad: string | null;
+    eastRoad: string | null;
+    westRoad: string | null;
+  };
+};
+
+type RefinementAdjustment = {
+  shiftMeters: { north: number; east: number };
+  scaleFactor: number;
+  confidence: number;
+  reasoning: string;
+};
+
+type ProcessingStep = {
+  id: string;
+  label: string;
+  status: "pending" | "active" | "complete" | "error";
+  detail?: string;
+};
+
+// Helper to get step status class name
+function getStepStatusClassName(status: ProcessingStep["status"]): string {
+  switch (status) {
+    case "active":
+      return "font-medium text-primary";
+    case "complete":
+      return "text-muted-foreground";
+    case "error":
+      return "text-destructive";
+    default:
+      return "text-muted-foreground/60";
+  }
 }
 
-// Draggable/resizable overlay component
-function DraggableOverlay({
-	imageUrl,
-	bounds,
-	opacity,
-	isVisible,
+// Helper component for step status icon
+function StepStatusIcon({ status }: { status: ProcessingStep["status"] }) {
+  switch (status) {
+    case "pending":
+      return (
+        <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/30" />
+      );
+    case "active":
+      return <Loader2 className="h-4 w-4 animate-spin text-primary" />;
+    case "complete":
+      return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+    default:
+      return <AlertCircle className="h-4 w-4 text-destructive" />;
+  }
+}
+
+type Message = {
+  id: string;
+  type: "info" | "success" | "error" | "extraction" | "refinement";
+  content: string;
+  timestamp: Date;
+  data?: ExtractedPlanData | RefinementAdjustment;
+  expanded?: boolean;
+};
+
+// Helper to get message type class name
+function getMessageClassName(type: Message["type"]): string {
+  switch (type) {
+    case "error":
+      return "border border-destructive/30 bg-destructive/10 text-destructive";
+    case "success":
+      return "border border-green-500/30 bg-green-500/10";
+    case "extraction":
+      return "border bg-background";
+    case "refinement":
+      return "border border-primary/30 bg-primary/5";
+    default:
+      return "bg-muted/50";
+  }
+}
+
+// Helper component for message icon
+function MessageIcon({ type }: { type: Message["type"] }) {
+  switch (type) {
+    case "error":
+      return <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />;
+    case "success":
+      return (
+        <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-500" />
+      );
+    case "extraction":
+      return <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />;
+    case "refinement":
+      return (
+        <RefreshCw className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+      );
+    default:
+      return (
+        <Sparkles className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
+      );
+  }
+}
+
+// Geocoded intersection with coordinates
+type GeocodedIntersection = {
+  road1: string;
+  road2: string;
+  cornerPosition: string;
+  lat: number;
+  lng: number;
+};
+
+// Road polyline with geometry data
+type RoadPolylineData = {
+  roadName: string;
+  points: Array<{ lat: number; lng: number }>;
+  color: string;
+};
+
+// Polyline component for drawing roads on the map
+function RoadPolyline({
+  path,
+  color = "#ef4444",
+  weight = 4,
+  isVisible = true,
 }: {
-	imageUrl: string;
-	bounds: LatLngBoundsLiteral;
-	opacity: number;
-	onBoundsChange: (bounds: LatLngBoundsLiteral) => void;
-	isVisible: boolean;
+  path: Array<{ lat: number; lng: number }>;
+  color?: string;
+  weight?: number;
+  isVisible?: boolean;
 }) {
-	const map = useMap();
-	const overlayRef = useRef<google.maps.GroundOverlay | null>(null);
+  const map = useMap();
+  const polylineRef = useRef<google.maps.Polyline | null>(null);
 
-	useEffect(() => {
-		if (!map || !bounds || !imageUrl || !isVisible) {
-			if (overlayRef.current) {
-				overlayRef.current.setMap(null);
-				overlayRef.current = null;
-			}
-			return;
-		}
+  useEffect(() => {
+    if (!(map && path.length >= 2 && isVisible)) {
+      if (polylineRef.current) {
+        polylineRef.current.setMap(null);
+        polylineRef.current = null;
+      }
+      return;
+    }
 
-		// Remove existing overlay
-		if (overlayRef.current) {
-			overlayRef.current.setMap(null);
-		}
+    if (polylineRef.current) {
+      polylineRef.current.setMap(null);
+    }
 
-		// Create new overlay
-		const overlay = new google.maps.GroundOverlay(imageUrl, bounds, {
-			opacity,
-			clickable: true,
-		});
-		overlay.setMap(map);
-		overlayRef.current = overlay;
+    const polyline = new google.maps.Polyline({
+      path,
+      strokeColor: color,
+      strokeOpacity: 0.8,
+      strokeWeight: weight,
+      map,
+    });
+    polylineRef.current = polyline;
 
-		return () => {
-			if (overlayRef.current) {
-				overlayRef.current.setMap(null);
-				overlayRef.current = null;
-			}
-		};
-	}, [map, bounds, imageUrl, opacity, isVisible]);
+    return () => {
+      if (polylineRef.current) {
+        polylineRef.current.setMap(null);
+        polylineRef.current = null;
+      }
+    };
+  }, [map, path, color, weight, isVisible]);
 
-	// Update opacity without recreating overlay
-	useEffect(() => {
-		if (overlayRef.current) {
-			overlayRef.current.setOpacity(opacity);
-		}
-	}, [opacity]);
-
-	return null;
+  return null;
 }
 
-// Corner markers for resizing - using library Marker component
+// Intersection marker component
+function IntersectionMarker({
+  position,
+  label,
+  isVisible = true,
+}: {
+  position: { lat: number; lng: number };
+  label: string;
+  isVisible?: boolean;
+}) {
+  if (!isVisible) {
+    return null;
+  }
+
+  return (
+    <Marker
+      icon={{
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: "#22c55e",
+        fillOpacity: 1,
+        strokeColor: "white",
+        strokeWeight: 2,
+      }}
+      label={{
+        text: label,
+        color: "#22c55e",
+        fontSize: "10px",
+        fontWeight: "bold",
+        className: "intersection-label",
+      }}
+      position={position}
+      title={label}
+    />
+  );
+}
+
+// Ground overlay component
+function GroundOverlayLayer({
+  imageUrl,
+  bounds,
+  opacity,
+  isVisible,
+}: {
+  imageUrl: string;
+  bounds: LatLngBoundsLiteral;
+  opacity: number;
+  isVisible: boolean;
+}) {
+  const map = useMap();
+  const overlayRef = useRef<google.maps.GroundOverlay | null>(null);
+
+  useEffect(() => {
+    if (!(map && bounds && imageUrl && isVisible)) {
+      if (overlayRef.current) {
+        overlayRef.current.setMap(null);
+        overlayRef.current = null;
+      }
+      return;
+    }
+
+    if (overlayRef.current) {
+      overlayRef.current.setMap(null);
+    }
+
+    const overlay = new google.maps.GroundOverlay(imageUrl, bounds, {
+      opacity,
+      clickable: true,
+    });
+    overlay.setMap(map);
+    overlayRef.current = overlay;
+
+    return () => {
+      if (overlayRef.current) {
+        overlayRef.current.setMap(null);
+        overlayRef.current = null;
+      }
+    };
+  }, [map, bounds, imageUrl, opacity, isVisible]);
+
+  useEffect(() => {
+    if (overlayRef.current) {
+      overlayRef.current.setOpacity(opacity);
+    }
+  }, [opacity]);
+
+  return null;
+}
+
+// Corner markers for resizing
 function CornerMarkers({
-	bounds,
-	onBoundsChange,
+  bounds,
+  onBoundsChange,
 }: {
-	bounds: LatLngBoundsLiteral;
-	onBoundsChange: (bounds: LatLngBoundsLiteral) => void;
+  bounds: LatLngBoundsLiteral;
+  onBoundsChange: (bounds: LatLngBoundsLiteral) => void;
 }) {
-	const corners = [
-		{ lat: bounds.north, lng: bounds.west, label: "NW", type: "nw" },
-		{ lat: bounds.north, lng: bounds.east, label: "NE", type: "ne" },
-		{ lat: bounds.south, lng: bounds.west, label: "SW", type: "sw" },
-		{ lat: bounds.south, lng: bounds.east, label: "SE", type: "se" },
-	];
+  const corners = [
+    { lat: bounds.north, lng: bounds.west, label: "NW", type: "nw" },
+    { lat: bounds.north, lng: bounds.east, label: "NE", type: "ne" },
+    { lat: bounds.south, lng: bounds.west, label: "SW", type: "sw" },
+    { lat: bounds.south, lng: bounds.east, label: "SE", type: "se" },
+  ];
 
-	const handleDrag = (type: string, e: google.maps.MapMouseEvent) => {
-		if (!e.latLng) return;
-		const lat = e.latLng.lat();
-		const lng = e.latLng.lng();
+  const handleDrag = (type: string, e: google.maps.MapMouseEvent) => {
+    if (!e.latLng) {
+      return;
+    }
+    const lat = e.latLng.lat();
+    const lng = e.latLng.lng();
 
-		const newBounds = { ...bounds };
-		if (type.includes("n")) newBounds.north = lat;
-		if (type.includes("s")) newBounds.south = lat;
-		if (type.includes("w")) newBounds.west = lng;
-		if (type.includes("e")) newBounds.east = lng;
+    const newBounds = { ...bounds };
+    if (type.includes("n")) {
+      newBounds.north = lat;
+    }
+    if (type.includes("s")) {
+      newBounds.south = lat;
+    }
+    if (type.includes("w")) {
+      newBounds.west = lng;
+    }
+    if (type.includes("e")) {
+      newBounds.east = lng;
+    }
 
-		// Ensure bounds are valid
-		if (newBounds.north > newBounds.south && newBounds.east > newBounds.west) {
-			onBoundsChange(newBounds);
-		}
-	};
+    if (newBounds.north > newBounds.south && newBounds.east > newBounds.west) {
+      onBoundsChange(newBounds);
+    }
+  };
 
-	return (
-		<>
-			{corners.map(({ lat, lng, label, type }) => (
-				<Marker
-					key={type}
-					position={{ lat, lng }}
-					draggable={true}
-					label={{
-						text: label,
-						color: "white",
-						fontSize: "10px",
-						fontWeight: "bold",
-					}}
-					icon={{
-						path: google.maps.SymbolPath.CIRCLE,
-						scale: 8,
-						fillColor: "#3b82f6",
-						fillOpacity: 1,
-						strokeColor: "white",
-						strokeWeight: 2,
-					}}
-					onDrag={(e) => handleDrag(type, e)}
-					onDragEnd={(e) => handleDrag(type, e)}
-				/>
-			))}
-		</>
-	);
+  return (
+    <>
+      {corners.map(({ lat, lng, label, type }) => (
+        <Marker
+          draggable={true}
+          icon={{
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 10,
+            fillColor: "#3b82f6",
+            fillOpacity: 1,
+            strokeColor: "white",
+            strokeWeight: 3,
+          }}
+          key={type}
+          label={{
+            text: label,
+            color: "white",
+            fontSize: "11px",
+            fontWeight: "bold",
+          }}
+          onDrag={(e) => handleDrag(type, e)}
+          onDragEnd={(e) => handleDrag(type, e)}
+          position={{ lat, lng }}
+          title={`Drag to resize (${label})`}
+        />
+      ))}
+    </>
+  );
 }
 
-// Map controller for programmatic map actions
+// Map controller for programmatic actions
 function MapController({
-	bounds,
-	shouldFitBounds,
-	onFitComplete,
+  bounds,
+  shouldFitBounds,
+  onFitComplete,
 }: {
-	bounds: LatLngBoundsLiteral;
-	shouldFitBounds: boolean;
-	onFitComplete: () => void;
+  bounds: LatLngBoundsLiteral;
+  shouldFitBounds: boolean;
+  onFitComplete: () => void;
 }) {
-	const map = useMap();
+  const map = useMap();
 
-	useEffect(() => {
-		if (!map || !shouldFitBounds) return;
+  useEffect(() => {
+    if (!(map && shouldFitBounds)) {
+      return;
+    }
 
-		const googleBounds = new google.maps.LatLngBounds(
-			{ lat: bounds.south, lng: bounds.west },
-			{ lat: bounds.north, lng: bounds.east },
-		);
-		map.fitBounds(googleBounds, 50); // 50px padding
-		onFitComplete();
-	}, [map, bounds, shouldFitBounds, onFitComplete]);
+    const googleBounds = new google.maps.LatLngBounds(
+      { lat: bounds.south, lng: bounds.west },
+      { lat: bounds.north, lng: bounds.east }
+    );
+    map.fitBounds(googleBounds, 100);
+    onFitComplete();
+  }, [map, bounds, shouldFitBounds, onFitComplete]);
 
-	return null;
+  return null;
+}
+
+// Map type controller for dynamic map type changes
+function MapTypeController({
+  mapTypeId,
+}: {
+  mapTypeId: "roadmap" | "terrain" | "satellite" | "hybrid";
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (map) {
+      map.setMapTypeId(mapTypeId);
+    }
+  }, [map, mapTypeId]);
+
+  return null;
+}
+
+// Default bounds (Phoenix, AZ area)
+const DEFAULT_BOUNDS: LatLngBoundsLiteral = {
+  north: 33.5,
+  south: 33.3,
+  east: -111.85,
+  west: -112.05,
+};
+
+// Convert file to base64 data URL
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Convert PDF first page to image (for map overlay display)
+// Returns both the image data URL and the aspect ratio (width/height)
+async function pdfFirstPageToImage(
+  file: File,
+  scale = 2
+): Promise<{ imageUrl: string; aspectRatio: number }> {
+  const arrayBuffer = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+  const page = await doc.getPage(1);
+
+  // Get viewport with explicit rotation handling
+  // PDF pages can have rotation metadata (0, 90, 180, 270)
+  const rotation = page.rotate || 0;
+  const viewport = page.getViewport({ scale, rotation });
+
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas 2D context unavailable");
+  }
+  canvas.height = viewport.height;
+  canvas.width = viewport.width;
+  await page.render({ canvas, canvasContext: context, viewport }).promise;
+
+  const aspectRatio = viewport.width / viewport.height;
+  console.log(
+    `[PDF] Page rotation: ${rotation}°, viewport: ${viewport.width}x${viewport.height}, aspect ratio: ${aspectRatio.toFixed(3)}`
+  );
+
+  return {
+    imageUrl: canvas.toDataURL("image/png"),
+    aspectRatio,
+  };
 }
 
 export function PlanOverlayTool() {
-	// State
-	const [mapsApiKey, setMapsApiKey] = useState<string | null>(null);
-	const [overlayUrl, setOverlayUrl] = useState<string | null>(null);
-	const [fileName, setFileName] = useState<string | null>(null);
-	const [bounds, setBounds] = useState<LatLngBoundsLiteral>({
-		north: 33.345,
-		south: 33.338,
-		east: -111.922,
-		west: -111.934,
-	});
-	const [opacity, setOpacity] = useState(0.6);
-	const [isOverlayVisible, setIsOverlayVisible] = useState(true);
-	const [isDraggingFile, setIsDraggingFile] = useState(false);
-	const [isLoading, setIsLoading] = useState(false);
-	const [isPanelOpen, setIsPanelOpen] = useState(true);
+  // Core state
+  const [mapsApiKey, setMapsApiKey] = useState<string | null>(null);
+  const [pdfDataUrl, setPdfDataUrl] = useState<string | null>(null);
+  const [overlayImageUrl, setOverlayImageUrl] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [bounds, setBounds] = useState<LatLngBoundsLiteral>(DEFAULT_BOUNDS);
+  const [opacity, setOpacity] = useState(0.6);
+  const [isOverlayVisible, setIsOverlayVisible] = useState(true);
 
-	// AI state
-	const [aiMessages, setAiMessages] = useState<AIMessage[]>([]);
-	const [isAiThinking, setIsAiThinking] = useState(false);
-	const [sessionId, setSessionId] = useState<string | null>(null);
-	const [currentStatus, setCurrentStatus] = useState<string | null>(null);
-	const [currentThinking, setCurrentThinking] = useState<string>("");
-	const [expandedThinking, setExpandedThinking] = useState<Set<number>>(
-		new Set(),
-	);
+  // UI state
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [shouldFitBounds, setShouldFitBounds] = useState(false);
 
-	// Refs
-	const mapContainerRef = useRef<HTMLDivElement>(null);
-	const fileInputRef = useRef<HTMLInputElement>(null);
-	const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Processing state
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>([]);
+  const [currentStatus, setCurrentStatus] = useState<string>("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [refinementCount, setRefinementCount] = useState(0);
+  const [_extractedData, setExtractedData] = useState<ExtractedPlanData | null>(
+    null
+  );
+  const [geocodedIntersections, setGeocodedIntersections] = useState<
+    GeocodedIntersection[]
+  >([]);
+  const [showRoadHighlights, setShowRoadHighlights] = useState(true);
+  const [roadPolylines, setRoadPolylines] = useState<RoadPolylineData[]>([]);
 
-	// Map fit state
-	const [shouldFitBounds, setShouldFitBounds] = useState(false);
+  // Deep refinement state
+  const [mapTypeId, setMapTypeId] = useState<"roadmap" | "terrain">("roadmap");
+  const [originalBounds, setOriginalBounds] =
+    useState<LatLngBoundsLiteral | null>(null);
+  const [isDeepRefining, setIsDeepRefining] = useState(false);
+  const [deepRefineIteration, setDeepRefineIteration] = useState(0);
 
-	// Load config on mount
-	useEffect(() => {
-		fetch("/api/config")
-			.then((res) => res.json())
-			.then((data: { mapsApiKey?: string }) =>
-				setMapsApiKey(data.mapsApiKey ?? ""),
-			)
-			.catch(() => setMapsApiKey(""));
-	}, []);
+  // Refs
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-	// Auto-scroll messages
-	useEffect(() => {
-		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-	}, [aiMessages]);
+  // Load config on mount
+  useEffect(() => {
+    fetch("/api/config")
+      .then((res) => res.json())
+      .then((data: { mapsApiKey?: string }) =>
+        setMapsApiKey(data.mapsApiKey ?? "")
+      )
+      .catch(() => setMapsApiKey(""));
+  }, []);
 
-	const center = useMemo<LatLngLiteral>(
-		() => ({
-			lat: (bounds.north + bounds.south) / 2,
-			lng: (bounds.east + bounds.west) / 2,
-		}),
-		[bounds],
-	);
+  // Auto-scroll messages when new messages arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages.length]);
 
-	// File handling
-	const handleFile = useCallback(async (file: File) => {
-		if (!file.type.includes("pdf")) {
-			alert("Please upload a PDF file");
-			return;
-		}
+  const center = useMemo<LatLngLiteral>(
+    () => ({
+      lat: (bounds.north + bounds.south) / 2,
+      lng: (bounds.east + bounds.west) / 2,
+    }),
+    [bounds]
+  );
 
-		setIsLoading(true);
-		setFileName(file.name);
+  // Add a message
+  const addMessage = useCallback(
+    (
+      type: Message["type"],
+      content: string,
+      data?: ExtractedPlanData | RefinementAdjustment
+    ) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          type,
+          content,
+          timestamp: new Date(),
+          data,
+        },
+      ]);
+    },
+    []
+  );
 
-		try {
-			const dataUrl = await pdfFirstPageToDataUrl(file);
-			setOverlayUrl(dataUrl);
+  // Update processing step status
+  const updateStep = useCallback(
+    (id: string, status: ProcessingStep["status"], detail?: string) => {
+      setProcessingSteps((prev) =>
+        prev.map((step) =>
+          step.id === id ? { ...step, status, detail } : step
+        )
+      );
+    },
+    []
+  );
 
-			// Start AI analysis
-			setSessionId(crypto.randomUUID());
-			setAiMessages([
-				{
-					role: "system",
-					content: `Analyzing "${file.name}"...`,
-					timestamp: new Date(),
-				},
-			]);
+  // Stream response from API
+  const streamResponse = useCallback(
+    async <T extends Record<string, unknown>>(
+      url: string,
+      body: object,
+      onStatus: (message: string) => void
+    ): Promise<T & { fullText: string }> => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
 
-			// Call AI to analyze and position
-			await analyzeAndPosition(dataUrl, file.name);
-		} catch (error) {
-			console.error(error);
-			setAiMessages((prev) => [
-				...prev,
-				{
-					role: "system",
-					content: `Error: Could not process the PDF. ${error}`,
-					timestamp: new Date(),
-				},
-			]);
-		} finally {
-			setIsLoading(false);
-		}
-	}, []);
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || `HTTP ${res.status}`);
+      }
 
-	// Analyze with AI and get initial position (with streaming)
-	const analyzeAndPosition = async (imageDataUrl: string, filename: string) => {
-		setIsAiThinking(true);
-		setCurrentStatus("Starting analysis...");
-		setCurrentThinking("");
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body");
+      }
 
-		// Add a placeholder message that we'll update
-		const msgIndex = aiMessages.length;
-		setAiMessages((prev) => [
-			...prev,
-			{
-				role: "assistant",
-				content: "",
-				timestamp: new Date(),
-				isStreaming: true,
-			},
-		]);
+      const decoder = new TextDecoder();
+      let fullText = "";
 
-		try {
-			const res = await fetch("/api/ai/analyze/stream", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					imageDataUrl,
-					filename,
-				}),
-			});
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
 
-			if (!res.ok) {
-				throw new Error(`HTTP ${res.status}`);
-			}
+        const chunk = decoder.decode(value);
+        const lines = chunk
+          .split("\n")
+          .filter((line) => line.startsWith("data: "));
 
-			const reader = res.body?.getReader();
-			if (!reader) throw new Error("No response body");
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line.slice(6));
 
-			const decoder = new TextDecoder();
-			let fullText = "";
-			let fullThinking = "";
-			let finalBounds: LatLngBoundsLiteral | undefined;
+            if (data.type === "error") {
+              throw new Error(data.error);
+            }
 
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
+            if (data.type === "status") {
+              onStatus(data.message);
+            }
 
-				const chunk = decoder.decode(value);
-				const lines = chunk
-					.split("\n")
-					.filter((line) => line.startsWith("data: "));
+            if (data.type === "text") {
+              fullText += data.text;
+            }
 
-				for (const line of lines) {
-					const jsonStr = line.slice(6); // Remove "data: "
-					try {
-						const data = JSON.parse(jsonStr);
+            if (data.type === "complete") {
+              return { ...data, fullText } as T & { fullText: string };
+            }
+          } catch (e) {
+            if (
+              e instanceof Error &&
+              e.message !== "Unexpected end of JSON input"
+            ) {
+              throw e;
+            }
+          }
+        }
+      }
+      throw new Error("Stream ended without completion");
+    },
+    []
+  );
 
-						if (data.type === "error" || data.error) {
-							throw new Error(data.error || "Unknown error");
-						}
+  // Capture screenshot using Google Maps Static API + overlay composite
+  const captureScreenshot = useCallback(async (): Promise<string | null> => {
+    if (!(mapsApiKey && overlayImageUrl)) {
+      return null;
+    }
 
-						// Handle status updates
-						if (data.type === "status" && data.message) {
-							setCurrentStatus(data.message);
-						}
+    try {
+      const centerLat = (bounds.north + bounds.south) / 2;
+      const centerLng = (bounds.east + bounds.west) / 2;
 
-						// Handle thinking/reasoning
-						if (data.type === "thinking" && data.text) {
-							fullThinking += data.text;
-							setCurrentThinking(fullThinking);
-						}
+      // Calculate zoom level based on bounds span
+      const latSpan = bounds.north - bounds.south;
+      const zoom = Math.min(
+        20,
+        Math.max(10, Math.floor(14 - Math.log2(latSpan * 111)))
+      );
 
-						// Handle main text content
-						if (data.type === "text" && data.text) {
-							fullText += data.text;
-							// Update the message in place
-							setAiMessages((prev) => {
-								const updated = [...prev];
-								const existingMsg = updated[msgIndex + 1];
-								if (existingMsg) {
-									updated[msgIndex + 1] = {
-										role: existingMsg.role,
-										timestamp: existingMsg.timestamp,
-										bounds: existingMsg.bounds,
-										thinking: fullThinking || undefined,
-										isStreaming: true,
-										content: fullText
-											.replace(/\{"bounds":\s*\{[^}]+\}\}/, "")
-											.trim(),
-									};
-								}
-								return updated;
-							});
-						}
+      // Get satellite image from Google Maps Static API
+      const staticUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${centerLat},${centerLng}&zoom=${zoom}&size=640x640&maptype=hybrid&key=${mapsApiKey}`;
 
-						// Handle completion
-						if (data.type === "complete" && data.done) {
-							finalBounds = data.bounds;
-							if (data.thinking) {
-								fullThinking = data.thinking;
-							}
-						}
-					} catch (e) {
-						if (e instanceof Error && e.message !== "Unknown error") {
-							throw e;
-						}
-						// JSON parse error, skip
-					}
-				}
-			}
+      // Create composite canvas with satellite + overlay
+      const canvas = document.createElement("canvas");
+      canvas.width = 640;
+      canvas.height = 640;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        return null;
+      }
 
-			// Finalize message
-			setAiMessages((prev) => {
-				const updated = [...prev];
-				const existingMsg = updated[msgIndex + 1];
-				if (existingMsg) {
-					updated[msgIndex + 1] = {
-						role: existingMsg.role,
-						timestamp: existingMsg.timestamp,
-						content:
-							existingMsg.content ||
-							fullText.replace(/\{"bounds":\s*\{[^}]+\}\}/, "").trim(),
-						bounds: finalBounds,
-						thinking: fullThinking || undefined,
-						isStreaming: false,
-					};
-				}
-				return updated;
-			});
+      // Load and draw satellite image
+      const satImage = new Image();
+      satImage.crossOrigin = "anonymous";
+      await new Promise<void>((resolve, reject) => {
+        satImage.onload = () => resolve();
+        satImage.onerror = reject;
+        satImage.src = staticUrl;
+      });
+      ctx.drawImage(satImage, 0, 0, 640, 640);
 
-			// Apply bounds if found
-			if (finalBounds) {
-				setBounds(finalBounds);
-				setShouldFitBounds(true); // Pan to show the overlay
-			}
+      // Load and draw overlay with transparency
+      const overlayImage = new Image();
+      await new Promise<void>((resolve, reject) => {
+        overlayImage.onload = () => resolve();
+        overlayImage.onerror = reject;
+        overlayImage.src = overlayImageUrl;
+      });
+      ctx.globalAlpha = opacity;
+      ctx.drawImage(overlayImage, 0, 0, 640, 640);
 
-			setCurrentStatus(null);
-			setCurrentThinking("");
-		} catch (error) {
-			setAiMessages((prev) => {
-				const updated = [...prev];
-				const existingMsg = updated[msgIndex + 1];
-				if (existingMsg) {
-					updated[msgIndex + 1] = {
-						role: existingMsg.role,
-						timestamp: existingMsg.timestamp,
-						bounds: existingMsg.bounds,
-						isStreaming: false,
-						content: `I encountered an issue analyzing the plan: ${error}. You can still manually position the overlay using the corner handles.`,
-					};
-				}
-				return updated;
-			});
-			setCurrentStatus(null);
-			setCurrentThinking("");
-		} finally {
-			setIsAiThinking(false);
-		}
-	};
+      return canvas.toDataURL("image/png");
+    } catch (error) {
+      console.error("Screenshot failed:", error);
+      return null;
+    }
+  }, [mapsApiKey, overlayImageUrl, bounds, opacity]);
 
-	// Request AI refinement with screenshot
-	const requestRefinement = async () => {
-		if (!mapContainerRef.current || !overlayUrl) return;
+  // MAIN PROCESSING FLOW
+  const processDocument = useCallback(
+    async (file: File) => {
+      setIsProcessing(true);
+      setMessages([]);
+      setExtractedData(null);
+      setRefinementCount(0);
+      const newSessionId = crypto.randomUUID();
+      setSessionId(newSessionId);
 
-		setIsAiThinking(true);
-		setAiMessages((prev) => [
-			...prev,
-			{
-				role: "user",
-				content: "Please refine the positioning based on the current view.",
-				timestamp: new Date(),
-			},
-		]);
+      // Initialize processing steps
+      const steps: ProcessingStep[] = [
+        { id: "read", label: "Reading document", status: "pending" },
+        { id: "extract", label: "Extracting location", status: "pending" },
+        { id: "geocode", label: "Geocoding address", status: "pending" },
+        { id: "position", label: "Initial positioning", status: "pending" },
+        { id: "refine", label: "Visual refinement", status: "pending" },
+      ];
+      setProcessingSteps(steps);
 
-		try {
-			// Capture screenshot of the map
-			const canvas = await html2canvas(mapContainerRef.current, {
-				useCORS: true,
-				allowTaint: true,
-				logging: false,
-			});
-			const screenshotUrl = canvas.toDataURL("image/png");
+      try {
+        // Step 1: Read PDF and convert to image for overlay
+        updateStep("read", "active");
+        setCurrentStatus("Reading PDF...");
 
-			const res = await fetch("/api/ai/refine", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					screenshotDataUrl: screenshotUrl,
-					planDataUrl: overlayUrl,
-					currentBounds: bounds,
-					sessionId,
-				}),
-			});
+        // Get raw PDF data URL for AI analysis
+        const dataUrl = await fileToDataUrl(file);
+        setPdfDataUrl(dataUrl);
 
-			const data = await res.json();
+        // Convert first page to image for map overlay
+        setCurrentStatus("Converting to image...");
+        const { imageUrl, aspectRatio } = await pdfFirstPageToImage(file);
+        setOverlayImageUrl(imageUrl);
 
-			if (data.error) {
-				throw new Error(data.error);
-			}
+        updateStep("read", "complete");
 
-			setAiMessages((prev) => [
-				...prev,
-				{
-					role: "assistant",
-					content: data.analysis,
-					timestamp: new Date(),
-					bounds: data.bounds,
-				},
-			]);
+        // Step 2: Extract location data
+        updateStep("extract", "active");
+        setCurrentStatus("Analyzing document with AI...");
 
-			if (data.bounds) {
-				setBounds(data.bounds);
-				setShouldFitBounds(true);
-			}
-		} catch (error) {
-			setAiMessages((prev) => [
-				...prev,
-				{
-					role: "assistant",
-					content: `Refinement failed: ${error}`,
-					timestamp: new Date(),
-				},
-			]);
-		} finally {
-			setIsAiThinking(false);
-		}
-	};
+        const extractResult = await streamResponse<{
+          extractedData: ExtractedPlanData | null;
+        }>(
+          "/api/ai/extract",
+          { pdfDataUrl: dataUrl, filename: file.name },
+          (msg) => setCurrentStatus(msg)
+        );
 
-	// Drag and drop handlers
-	const handleDragOver = (e: React.DragEvent) => {
-		e.preventDefault();
-		setIsDraggingFile(true);
-	};
+        const extracted = extractResult.extractedData;
+        if (!extracted) {
+          throw new Error("Could not extract location data from document");
+        }
+        setExtractedData(extracted);
 
-	const handleDragLeave = (e: React.DragEvent) => {
-		e.preventDefault();
-		setIsDraggingFile(false);
-	};
+        updateStep(
+          "extract",
+          "complete",
+          extracted.address || "Location found"
+        );
+        addMessage(
+          "extraction",
+          `Found: ${extracted.address || "Unknown address"}, ${extracted.city || ""} ${extracted.state || ""}`,
+          extracted
+        );
 
-	const handleDrop = (e: React.DragEvent) => {
-		e.preventDefault();
-		setIsDraggingFile(false);
-		const file = e.dataTransfer.files[0];
-		if (file) handleFile(file);
-	};
+        // Step 3: Geocode - Try intersection first, then fall back to address
+        updateStep("geocode", "active");
 
-	const handleBoundsChange = useCallback((newBounds: LatLngBoundsLiteral) => {
-		setBounds(newBounds);
-	}, []);
+        let geocodeData: {
+          lat: number;
+          lng: number;
+          formattedAddress: string;
+        } | null = null;
+        let useCornerBased = false;
+        let cornerPosition:
+          | "northwest"
+          | "northeast"
+          | "southwest"
+          | "southeast"
+          | null = null;
 
-	// Default bounds (for reset)
-	const defaultBounds: LatLngBoundsLiteral = {
-		north: 33.345,
-		south: 33.338,
-		east: -111.922,
-		west: -111.934,
-	};
+        // Try intersection geocoding first if we have intersections
+        const intersections = extracted.intersections || [];
+        const firstIntersection = intersections[0];
+        const hasValidIntersection =
+          firstIntersection !== undefined &&
+          firstIntersection.cornerPosition !== "unknown";
 
-	// Reset everything
-	const handleReset = () => {
-		setOverlayUrl(null);
-		setFileName(null);
-		setAiMessages([]);
-		setSessionId(null);
-		setBounds(defaultBounds);
-		setOpacity(0.6);
-		setIsOverlayVisible(true);
-	};
+        if (hasValidIntersection && extracted.city && firstIntersection) {
+          setCurrentStatus(
+            `Geocoding intersection: ${firstIntersection.road1} & ${firstIntersection.road2}...`
+          );
+          addMessage(
+            "info",
+            `Found intersection: ${firstIntersection.road1} & ${firstIntersection.road2} (${firstIntersection.cornerPosition} corner)`
+          );
 
-	// Reset just the bounds
-	const handleResetBounds = () => {
-		setBounds(defaultBounds);
-		setAiMessages((prev) => [
-			...prev,
-			{
-				role: "system",
-				content: "Bounds reset to default position.",
-				timestamp: new Date(),
-			},
-		]);
-	};
+          const intersectionRes = await fetch("/api/geocode/intersection", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              road1: firstIntersection.road1,
+              road2: firstIntersection.road2,
+              city: extracted.city,
+              state: extracted.state || "",
+            }),
+          });
 
-	if (mapsApiKey === null) {
-		return (
-			<div className="h-screen w-screen flex items-center justify-center bg-muted">
-				<Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-			</div>
-		);
-	}
+          if (intersectionRes.ok) {
+            const intersectionData: {
+              lat: number;
+              lng: number;
+              formattedAddress: string;
+            } = await intersectionRes.json();
+            geocodeData = intersectionData;
+            useCornerBased = true;
+            if (
+              firstIntersection.cornerPosition === "northwest" ||
+              firstIntersection.cornerPosition === "northeast" ||
+              firstIntersection.cornerPosition === "southwest" ||
+              firstIntersection.cornerPosition === "southeast"
+            ) {
+              cornerPosition = firstIntersection.cornerPosition;
+            }
 
-	if (!mapsApiKey) {
-		return (
-			<div className="h-screen w-screen flex items-center justify-center bg-muted">
-				<Card className="p-6 max-w-md">
-					<div className="flex items-center gap-3 text-destructive">
-						<XCircle className="w-6 h-6" />
-						<div>
-							<h2 className="font-semibold">Configuration Error</h2>
-							<p className="text-sm text-muted-foreground">
-								GOOGLE_MAPS_API_KEY is not configured.
-							</p>
-						</div>
-					</div>
-				</Card>
-			</div>
-		);
-	}
+            // Store geocoded intersection for road highlighting
+            const geocodedIntersection: GeocodedIntersection = {
+              road1: firstIntersection.road1,
+              road2: firstIntersection.road2,
+              cornerPosition: firstIntersection.cornerPosition,
+              lat: intersectionData.lat,
+              lng: intersectionData.lng,
+            };
+            setGeocodedIntersections([geocodedIntersection]);
 
-	return (
-		<div className="h-screen w-screen flex relative overflow-hidden">
-			{/* Main Map Area */}
-			<div
-				ref={mapContainerRef}
-				className="flex-1 relative"
-				onDragOver={handleDragOver}
-				onDragLeave={handleDragLeave}
-				onDrop={handleDrop}
-			>
-				<APIProvider apiKey={mapsApiKey}>
-					<Map
-						defaultZoom={16}
-						center={center}
-						gestureHandling="greedy"
-						disableDefaultUI={false}
-						mapTypeId="satellite"
-						mapTypeControl={true}
-						streetViewControl={false}
-						fullscreenControl={false}
-						zoomControl={true}
-						mapId="plan-overlay-map"
-						style={{ width: "100%", height: "100%" }}
-					>
-						<MapController
-							bounds={bounds}
-							shouldFitBounds={shouldFitBounds}
-							onFitComplete={() => setShouldFitBounds(false)}
-						/>
-						{overlayUrl && (
-							<>
-								<DraggableOverlay
-									imageUrl={overlayUrl}
-									bounds={bounds}
-									opacity={opacity}
-									onBoundsChange={handleBoundsChange}
-									isVisible={isOverlayVisible}
-								/>
-								{isOverlayVisible && (
-									<CornerMarkers
-										bounds={bounds}
-										onBoundsChange={handleBoundsChange}
-									/>
-								)}
-							</>
-						)}
-					</Map>
-				</APIProvider>
+            addMessage(
+              "success",
+              `Intersection geocoded: ${intersectionData.formattedAddress}`
+            );
 
-				{/* Drag overlay indicator */}
-				{isDraggingFile && (
-					<div className="absolute inset-0 bg-primary/10 backdrop-blur-sm flex items-center justify-center z-50 pointer-events-none">
-						<div className="bg-background/95 rounded-2xl p-8 shadow-2xl border-2 border-primary border-dashed">
-							<Upload className="w-12 h-12 mx-auto mb-3 text-primary" />
-							<p className="text-lg font-medium">Drop your PDF here</p>
-						</div>
-					</div>
-				)}
+            // Fetch road geometry for highlighting
+            setCurrentStatus("Fetching road geometry for highlighting...");
+            const roadColors = ["#ef4444", "#3b82f6", "#22c55e", "#f59e0b"];
+            const roadGeometryPromises = [
+              firstIntersection.road1,
+              firstIntersection.road2,
+            ].map(async (roadName, index) => {
+              try {
+                const res = await fetch("/api/roads/geometry", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    roadName,
+                    intersectionPoint: {
+                      lat: intersectionData.lat,
+                      lng: intersectionData.lng,
+                    },
+                    city: extracted.city,
+                    state: extracted.state || "",
+                    radiusMeters: 500,
+                  }),
+                });
 
-				{/* Loading overlay */}
-				{isLoading && (
-					<div className="absolute inset-0 bg-background/50 backdrop-blur-sm flex items-center justify-center z-50">
-						<div className="bg-background rounded-xl p-6 shadow-xl flex items-center gap-3">
-							<Loader2 className="w-6 h-6 animate-spin text-primary" />
-							<span>Processing PDF...</span>
-						</div>
-					</div>
-				)}
+                if (res.ok) {
+                  const data: { points: Array<{ lat: number; lng: number }> } =
+                    await res.json();
+                  return {
+                    roadName,
+                    points: data.points,
+                    color: roadColors[index % roadColors.length],
+                  } as RoadPolylineData;
+                }
+                return null;
+              } catch {
+                return null;
+              }
+            });
 
-				{/* Floating controls (bottom-left) */}
-				{overlayUrl && (
-					<div className="absolute bottom-6 left-6 z-40">
-						<Card className="p-3 shadow-lg bg-background/95 backdrop-blur">
-							<div className="flex items-center gap-4">
-								<Button
-									variant="ghost"
-									size="sm"
-									onClick={() => setIsOverlayVisible(!isOverlayVisible)}
-									className="gap-2"
-								>
-									{isOverlayVisible ? (
-										<Eye className="w-4 h-4" />
-									) : (
-										<EyeOff className="w-4 h-4" />
-									)}
-									{isOverlayVisible ? "Hide" : "Show"}
-								</Button>
+            const roadResults = await Promise.all(roadGeometryPromises);
+            const validRoads = roadResults.filter(
+              (r): r is RoadPolylineData => r !== null
+            );
+            setRoadPolylines(validRoads);
 
-								<div className="flex items-center gap-2">
-									<Label className="text-xs text-muted-foreground">
-										Opacity
-									</Label>
-									<input
-										type="range"
-										min={0.1}
-										max={1}
-										step={0.05}
-										value={opacity}
-										onChange={(e) => setOpacity(Number(e.target.value))}
-										className="w-24 h-1.5 accent-primary"
-									/>
-									<span className="text-xs text-muted-foreground w-8">
-										{Math.round(opacity * 100)}%
-									</span>
-								</div>
-							</div>
-						</Card>
-					</div>
-				)}
+            if (validRoads.length > 0) {
+              addMessage(
+                "info",
+                `Road highlighting: ${validRoads.map((r) => r.roadName).join(", ")}`
+              );
+            }
+          } else {
+            addMessage(
+              "info",
+              "Intersection geocoding failed, falling back to address..."
+            );
+          }
+        }
 
-				{/* Panel toggle button */}
-				<Button
-					variant="secondary"
-					size="icon"
-					className="absolute top-4 right-4 z-40 shadow-lg"
-					onClick={() => setIsPanelOpen(!isPanelOpen)}
-				>
-					{isPanelOpen ? (
-						<ChevronRight className="w-4 h-4" />
-					) : (
-						<ChevronLeft className="w-4 h-4" />
-					)}
-				</Button>
-			</div>
+        // Fall back to address geocoding
+        if (!geocodeData) {
+          setCurrentStatus("Looking up address coordinates...");
 
-			{/* Side Panel */}
-			<div
-				className={`
-          w-96 bg-background border-l flex flex-col transition-all duration-300
-          ${isPanelOpen ? "translate-x-0" : "translate-x-full"}
-          absolute right-0 top-0 bottom-0 z-30
-          md:relative md:translate-x-0 ${!isPanelOpen && "md:hidden"}
-        `}
-			>
-				{/* Header */}
-				<div className="p-4 border-b">
-					<h1 className="text-lg font-semibold flex items-center gap-2">
-						<MapPin className="w-5 h-5 text-primary" />
-						Plan Overlay Tool
-					</h1>
-					<p className="text-sm text-muted-foreground mt-1">
-						AI-powered construction plan positioning
-					</p>
-				</div>
+          const addressParts = [
+            extracted.address,
+            extracted.city,
+            extracted.state,
+          ].filter(Boolean);
+          const fullAddress = addressParts.join(", ");
 
-				{/* Upload Section */}
-				<div className="p-4 border-b">
-					{!overlayUrl ? (
-						<div
-							className={`
-                drop-zone p-6 text-center cursor-pointer
-                hover:border-primary/50 hover:bg-muted/50
-                ${isDraggingFile ? "dragging" : ""}
-              `}
-							onClick={() => fileInputRef.current?.click()}
-						>
-							<Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-							<p className="font-medium">Upload Plan PDF</p>
-							<p className="text-xs text-muted-foreground mt-1">
-								Click or drag & drop
-							</p>
-						</div>
-					) : (
-						<div className="flex items-center justify-between">
-							<div className="flex items-center gap-2 min-w-0">
-								<CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
-								<span className="text-sm truncate">{fileName}</span>
-							</div>
-							<Button variant="ghost" size="sm" onClick={handleReset}>
-								<RotateCcw className="w-4 h-4" />
-							</Button>
-						</div>
-					)}
-					<input
-						ref={fileInputRef}
-						type="file"
-						accept="application/pdf"
-						className="hidden"
-						onChange={(e) => {
-							const file = e.target.files?.[0];
-							if (file) handleFile(file);
-							e.target.value = "";
-						}}
-					/>
-				</div>
+          if (fullAddress) {
+            const geocodeRes = await fetch("/api/geocode", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ address: fullAddress }),
+            });
 
-				{/* AI Assistant */}
-				<div className="flex-1 flex flex-col min-h-0">
-					<div className="p-3 border-b bg-muted/30">
-						<div className="flex items-center justify-between">
-							<div className="flex items-center gap-2">
-								<Sparkles className="w-4 h-4 text-primary" />
-								<span className="text-sm font-medium">AI Assistant</span>
-							</div>
-							{overlayUrl && (
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={requestRefinement}
-									disabled={isAiThinking}
-									className="gap-1.5"
-								>
-									{isAiThinking ? (
-										<Loader2 className="w-3 h-3 animate-spin" />
-									) : (
-										<Sparkles className="w-3 h-3" />
-									)}
-									Refine
-								</Button>
-							)}
-						</div>
-					</div>
+            if (!geocodeRes.ok) {
+              throw new Error(`Geocoding failed for: ${fullAddress}`);
+            }
 
-					<div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-						{aiMessages.length === 0 ? (
-							<div className="text-center text-muted-foreground text-sm py-8">
-								<Sparkles className="w-8 h-8 mx-auto mb-2 opacity-30" />
-								<p>Upload a plan to start</p>
-								<p className="text-xs mt-1">
-									AI will analyze and position it automatically
-								</p>
-							</div>
-						) : (
-							<>
-								{aiMessages.map((msg, i) => (
-									<div
-										key={i}
-										className={`
-                      text-sm rounded-lg p-3 transition-all
-                      ${
-												msg.role === "user"
-													? "bg-primary text-primary-foreground ml-6"
-													: msg.role === "system"
-														? "bg-muted text-muted-foreground text-xs"
-														: "bg-muted/50 mr-6"
-											}
-                    `}
-									>
-										{/* Thinking section (collapsible) */}
-										{msg.thinking && (
-											<div className="mb-2">
-												<button
-													onClick={() => {
-														setExpandedThinking((prev) => {
-															const newSet = new Set(prev);
-															if (newSet.has(i)) {
-																newSet.delete(i);
-															} else {
-																newSet.add(i);
-															}
-															return newSet;
-														});
-													}}
-													className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-												>
-													<Brain className="w-3 h-3" />
-													<span>AI Reasoning</span>
-													{expandedThinking.has(i) ? (
-														<ChevronUp className="w-3 h-3" />
-													) : (
-														<ChevronDown className="w-3 h-3" />
-													)}
-												</button>
-												{expandedThinking.has(i) && (
-													<div className="mt-2 p-2 bg-background/50 rounded text-xs text-muted-foreground border-l-2 border-primary/30 max-h-32 overflow-y-auto">
-														{msg.thinking}
-													</div>
-												)}
-											</div>
-										)}
+            geocodeData = await geocodeRes.json();
+          } else {
+            // Last resort: try to geocode just the roads with city
+            const roads = extracted.roads || [];
+            const firstRoad = roads[0];
+            if (firstRoad && extracted.city) {
+              const primaryRoad = roads.find((r) => r.isPrimary) ?? firstRoad;
+              const fallbackAddress = `${primaryRoad.name}, ${extracted.city}, ${extracted.state || ""}`;
+              addMessage(
+                "info",
+                `Trying road-based geocode: ${fallbackAddress}`
+              );
 
-										{/* Streaming indicator */}
-										{msg.isStreaming && (
-											<div className="flex items-center gap-2 mb-2 text-xs text-primary">
-												<Loader2 className="w-3 h-3 animate-spin" />
-												<span className="animate-pulse">Receiving...</span>
-											</div>
-										)}
+              const fallbackRes = await fetch("/api/geocode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ address: fallbackAddress }),
+              });
 
-										{/* Main content */}
-										<div className={msg.isStreaming ? "opacity-90" : ""}>
-											{msg.content || (msg.isStreaming ? "..." : "")}
-										</div>
+              if (fallbackRes.ok) {
+                geocodeData = await fallbackRes.json();
+              }
+            }
 
-										{/* Bounds action */}
-										{msg.bounds && !msg.isStreaming && (
-											<Button
-												variant="link"
-												size="sm"
-												className="p-0 h-auto mt-2 text-xs"
-												onClick={() => setBounds(msg.bounds!)}
-											>
-												Apply these bounds
-											</Button>
-										)}
-									</div>
-								))}
+            if (!geocodeData) {
+              throw new Error("No address or roads found to geocode");
+            }
+          }
+        }
 
-								{/* Live status and thinking display */}
-								{isAiThinking && (
-									<div className="bg-gradient-to-r from-primary/10 to-primary/5 rounded-lg p-3 mr-6 border border-primary/20">
-										{/* Animated status */}
-										<div className="flex items-center gap-2 mb-2">
-											<div className="relative">
-												<div className="w-2 h-2 rounded-full bg-primary animate-ping absolute" />
-												<div className="w-2 h-2 rounded-full bg-primary" />
-											</div>
-											<span className="text-sm font-medium text-primary animate-pulse">
-												{currentStatus || "Processing..."}
-											</span>
-										</div>
+        // At this point geocodeData is guaranteed to be non-null (throw above ensures this)
+        if (!geocodeData) {
+          throw new Error("Geocode data is unexpectedly null");
+        }
 
-										{/* Live thinking preview */}
-										{currentThinking && (
-											<div className="mt-2 p-2 bg-background/50 rounded text-xs text-muted-foreground border-l-2 border-primary/30 max-h-24 overflow-y-auto">
-												<div className="flex items-center gap-1.5 mb-1 text-primary/70">
-													<Brain className="w-3 h-3" />
-													<span>Thinking...</span>
-												</div>
-												{currentThinking.slice(-200)}
-												{currentThinking.length > 200 && "..."}
-											</div>
-										)}
+        addMessage("success", `Geocoded to: ${geocodeData.formattedAddress}`);
 
-										{/* Animated dots */}
-										<div className="flex gap-1 mt-2">
-											<div className="w-1.5 h-1.5 rounded-full bg-primary ai-thinking-dot" />
-											<div className="w-1.5 h-1.5 rounded-full bg-primary ai-thinking-dot" />
-											<div className="w-1.5 h-1.5 rounded-full bg-primary ai-thinking-dot" />
-										</div>
-									</div>
-								)}
-								<div ref={messagesEndRef} />
-							</>
-						)}
-					</div>
-				</div>
+        updateStep(
+          "geocode",
+          "complete",
+          `${geocodeData.lat.toFixed(4)}, ${geocodeData.lng.toFixed(4)}`
+        );
 
-				{/* Quick Actions */}
-				{overlayUrl && (
-					<div className="p-4 border-t bg-muted/30">
-						<div className="grid grid-cols-2 gap-2">
-							<Button
-								variant="outline"
-								size="sm"
-								className="gap-1.5"
-								onClick={() => setShouldFitBounds(true)}
-							>
-								<Move className="w-3 h-3" />
-								Pan to Fit
-							</Button>
-							<Button
-								variant="outline"
-								size="sm"
-								className="gap-1.5"
-								onClick={handleResetBounds}
-							>
-								<Maximize2 className="w-3 h-3" />
-								Reset Bounds
-							</Button>
-						</div>
-					</div>
-				)}
-			</div>
-		</div>
-	);
+        // Step 4: Calculate initial bounds
+        updateStep("position", "active");
+        setCurrentStatus("Calculating overlay position...");
+
+        const sizeMeters = extracted.estimatedSizeMeters || 100;
+        let boundsData: { bounds: LatLngBoundsLiteral };
+
+        if (useCornerBased && cornerPosition) {
+          // Use corner-based positioning from intersection
+          console.log(
+            `[Frontend] Using corner-based bounds: corner=${cornerPosition}, size=${sizeMeters}m`
+          );
+          addMessage("info", `Using ${cornerPosition} corner as anchor point`);
+
+          const boundsRes = await fetch("/api/bounds/from-corner", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              corner: {
+                lat: geocodeData.lat,
+                lng: geocodeData.lng,
+              },
+              cornerPosition,
+              sizeMeters,
+              aspectRatio,
+            }),
+          });
+
+          boundsData = await boundsRes.json();
+        } else {
+          // Use center-based positioning (legacy)
+          console.log(
+            `[Frontend] Using center-based bounds: size=${sizeMeters}m, aspect=${aspectRatio.toFixed(3)}`
+          );
+
+          const boundsRes = await fetch("/api/bounds/calculate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              center: {
+                lat: geocodeData.lat,
+                lng: geocodeData.lng,
+              },
+              sizeMeters,
+              aspectRatio,
+            }),
+          });
+
+          boundsData = await boundsRes.json();
+        }
+
+        console.log("[Frontend] Received bounds:", boundsData.bounds);
+        setBounds(boundsData.bounds);
+        setOriginalBounds(boundsData.bounds); // Store for deep refinement bounds checking
+        setShouldFitBounds(true);
+
+        const positionMethod = useCornerBased
+          ? `${cornerPosition} corner anchor`
+          : "center-based";
+        updateStep(
+          "position",
+          "complete",
+          `~${sizeMeters}m (${positionMethod})`
+        );
+        addMessage(
+          "success",
+          `Positioned overlay: ${sizeMeters}m scale, ${positionMethod}`
+        );
+
+        // Step 5: Visual refinement (optional, run once)
+        updateStep("refine", "active");
+        setCurrentStatus("Preparing visual refinement...");
+
+        // Wait for map to render
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        const screenshot = await captureScreenshot();
+        if (screenshot) {
+          setCurrentStatus("AI is comparing with satellite...");
+          setRefinementCount(1);
+
+          const refineResult = await streamResponse<{
+            adjustment: RefinementAdjustment | null;
+            newBounds: LatLngBoundsLiteral | null;
+          }>(
+            "/api/ai/refine",
+            {
+              screenshotDataUrl: screenshot,
+              pdfDataUrl: dataUrl,
+              currentBounds: boundsData.bounds,
+              sessionId: newSessionId,
+            },
+            (msg) => setCurrentStatus(msg)
+          );
+
+          if (refineResult.adjustment && refineResult.newBounds) {
+            setBounds(refineResult.newBounds);
+            setShouldFitBounds(true);
+            addMessage(
+              "refinement",
+              refineResult.adjustment.reasoning,
+              refineResult.adjustment
+            );
+          }
+
+          updateStep("refine", "complete", "Alignment adjusted");
+        } else {
+          updateStep("refine", "complete", "Skipped");
+        }
+
+        setCurrentStatus("");
+        addMessage(
+          "success",
+          "Processing complete! Drag the corner markers to fine-tune positioning."
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Processing error:", message);
+        addMessage("error", message);
+        setCurrentStatus("");
+
+        // Mark current step as error
+        setProcessingSteps((prev) =>
+          prev.map((step) =>
+            step.status === "active" ? { ...step, status: "error" } : step
+          )
+        );
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [addMessage, captureScreenshot, streamResponse, updateStep]
+  );
+
+  // File handling
+  const handleFile = useCallback(
+    async (file: File) => {
+      if (!file.type.includes("pdf")) {
+        addMessage("error", "Please upload a PDF file");
+        return;
+      }
+
+      setFileName(file.name);
+      await processDocument(file);
+    },
+    [addMessage, processDocument]
+  );
+
+  // Manual refinement
+  const requestRefinement = useCallback(async () => {
+    if (!(pdfDataUrl && sessionId)) {
+      return;
+    }
+
+    setIsProcessing(true);
+    setRefinementCount((prev) => prev + 1);
+    setCurrentStatus("Capturing current view...");
+
+    try {
+      const screenshot = await captureScreenshot();
+      if (!screenshot) {
+        throw new Error("Could not capture screenshot");
+      }
+
+      setCurrentStatus("AI is analyzing alignment...");
+
+      const refineResult = await streamResponse<{
+        adjustment: RefinementAdjustment | null;
+        newBounds: LatLngBoundsLiteral | null;
+      }>(
+        "/api/ai/refine",
+        {
+          screenshotDataUrl: screenshot,
+          pdfDataUrl,
+          currentBounds: bounds,
+          sessionId,
+        },
+        (msg) => setCurrentStatus(msg)
+      );
+
+      if (refineResult.adjustment && refineResult.newBounds) {
+        setBounds(refineResult.newBounds);
+        setShouldFitBounds(true);
+        addMessage(
+          "refinement",
+          refineResult.adjustment.reasoning,
+          refineResult.adjustment
+        );
+      } else {
+        addMessage("info", "No adjustments needed - alignment looks good!");
+      }
+
+      setCurrentStatus("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addMessage("error", message);
+      setCurrentStatus("");
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [
+    pdfDataUrl,
+    sessionId,
+    bounds,
+    captureScreenshot,
+    streamResponse,
+    addMessage,
+  ]);
+
+  // Drag and drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      handleFile(file);
+    }
+  };
+
+  // Deep refinement with iterative terrain/feature matching
+  const handleDeepRefine = async () => {
+    if (!(overlayImageUrl && mapsApiKey)) {
+      addMessage("error", "No overlay image available for deep refinement");
+      return;
+    }
+
+    setIsDeepRefining(true);
+    setMapTypeId("terrain"); // Switch to terrain view for better matching
+    let currentIteration = 0;
+    const maxIterations = 5;
+    let currentBoundsLocal = bounds;
+
+    try {
+      while (currentIteration < maxIterations) {
+        currentIteration += 1;
+        setDeepRefineIteration(currentIteration);
+        addMessage(
+          "info",
+          `Deep refinement iteration ${currentIteration}/${maxIterations}...`
+        );
+
+        // Get terrain screenshot using Static Maps API
+        const centerLat =
+          (currentBoundsLocal.north + currentBoundsLocal.south) / 2;
+        const centerLng =
+          (currentBoundsLocal.east + currentBoundsLocal.west) / 2;
+        const terrainUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${centerLat},${centerLng}&zoom=17&size=800x600&maptype=terrain&key=${mapsApiKey}`;
+
+        // Fetch terrain image and convert to data URL
+        const terrainRes = await fetch(terrainUrl);
+        const terrainBlob = await terrainRes.blob();
+        const terrainDataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            resolve(reader.result as string);
+          };
+          reader.readAsDataURL(terrainBlob);
+        });
+
+        // Call deep refine API - send the rendered overlay image, not the PDF
+        console.log("[DeepRefine] Sending request with:", {
+          hasDrawing: !!overlayImageUrl,
+          hasTerrain: !!terrainDataUrl,
+          iteration: currentIteration,
+        });
+
+        const res = await fetch("/api/ai/deep-refine", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            drawingDataUrl: overlayImageUrl, // Use rendered image, not PDF
+            terrainScreenshotUrl: terrainDataUrl,
+            currentBounds: currentBoundsLocal,
+            originalBounds,
+            iteration: currentIteration,
+            maxShiftMeters: 200,
+          }),
+        });
+
+        if (!res.ok) {
+          throw new Error(`Deep refine failed: ${res.statusText}`);
+        }
+
+        // Parse SSE stream
+        const reader = res.body?.getReader();
+        if (!reader) {
+          throw new Error("No response body");
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let result: {
+          adjustment?: {
+            shiftMeters: { north: number; east: number };
+            scaleFactor: number;
+            confidence: number;
+            featuresMatched?: string[];
+            reasoning: string;
+          };
+          newBounds?: LatLngBoundsLiteral;
+          boundsClamped?: boolean;
+          shouldContinue?: boolean;
+        } | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "complete") {
+                result = data;
+              } else if (data.type === "error") {
+                throw new Error(data.error);
+              }
+            }
+          }
+        }
+
+        if (result?.adjustment) {
+          const adj = result.adjustment;
+          addMessage(
+            "refinement",
+            `Iteration ${currentIteration}: Shift ${adj.shiftMeters.north.toFixed(1)}m N, ${adj.shiftMeters.east.toFixed(1)}m E | Confidence: ${(adj.confidence * 100).toFixed(0)}%`,
+            adj
+          );
+
+          if (adj.featuresMatched?.length) {
+            addMessage(
+              "info",
+              `Features matched: ${adj.featuresMatched.join(", ")}`
+            );
+          }
+
+          if (result.boundsClamped) {
+            addMessage(
+              "info",
+              "Adjustment was clamped to stay within bounds limit"
+            );
+          }
+
+          if (result.newBounds) {
+            currentBoundsLocal = result.newBounds;
+            setBounds(result.newBounds);
+          }
+
+          // Check if we should continue
+          if (!result.shouldContinue) {
+            addMessage(
+              "success",
+              `Deep refinement converged after ${currentIteration} iterations`
+            );
+            break;
+          }
+        } else {
+          addMessage("info", "No adjustment suggested, stopping refinement");
+          break;
+        }
+      }
+
+      if (currentIteration >= maxIterations) {
+        addMessage("info", `Reached maximum iterations (${maxIterations})`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addMessage("error", `Deep refinement error: ${message}`);
+    } finally {
+      setIsDeepRefining(false);
+      setDeepRefineIteration(0);
+    }
+  };
+
+  const handleReset = () => {
+    setPdfDataUrl(null);
+    setOverlayImageUrl(null);
+    setFileName(null);
+    setMessages([]);
+    setSessionId(null);
+    setBounds(DEFAULT_BOUNDS);
+    setOpacity(0.6);
+    setIsOverlayVisible(true);
+    setCurrentStatus("");
+    setRefinementCount(0);
+    setProcessingSteps([]);
+    setExtractedData(null);
+    setGeocodedIntersections([]);
+    setShowRoadHighlights(true);
+    setRoadPolylines([]);
+    setMapTypeId("roadmap");
+    setOriginalBounds(null);
+    setIsDeepRefining(false);
+    setDeepRefineIteration(0);
+  };
+
+  // Loading state
+  if (mapsApiKey === null) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-muted">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!mapsApiKey) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-muted">
+        <Card className="max-w-md p-6">
+          <div className="flex items-center gap-3 text-destructive">
+            <XCircle className="h-6 w-6" />
+            <div>
+              <h2 className="font-semibold">Configuration Error</h2>
+              <p className="text-muted-foreground text-sm">
+                GOOGLE_MAPS_API_KEY is not configured.
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative flex h-screen w-screen overflow-hidden">
+      {/* Main Map Area */}
+      <div
+        aria-label="Map area - drag and drop PDF here"
+        className="relative flex-1"
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        ref={mapContainerRef}
+        role="application"
+      >
+        <APIProvider apiKey={mapsApiKey}>
+          <GoogleMap
+            defaultCenter={center}
+            defaultZoom={16}
+            disableDefaultUI={false}
+            fullscreenControl={false}
+            gestureHandling="greedy"
+            mapId="plan-overlay-map"
+            mapTypeControl={true}
+            mapTypeId={mapTypeId}
+            streetViewControl={false}
+            style={{ width: "100%", height: "100%" }}
+            zoomControl={true}
+          >
+            <MapController
+              bounds={bounds}
+              onFitComplete={() => setShouldFitBounds(false)}
+              shouldFitBounds={shouldFitBounds}
+            />
+            <MapTypeController mapTypeId={mapTypeId} />
+            {overlayImageUrl ? (
+              <>
+                <GroundOverlayLayer
+                  bounds={bounds}
+                  imageUrl={overlayImageUrl}
+                  isVisible={isOverlayVisible}
+                  opacity={opacity}
+                />
+                {isOverlayVisible ? (
+                  <CornerMarkers bounds={bounds} onBoundsChange={setBounds} />
+                ) : null}
+              </>
+            ) : null}
+            {/* Road polylines for highlighting */}
+            {roadPolylines.map((road) => (
+              <RoadPolyline
+                color={road.color}
+                isVisible={showRoadHighlights}
+                key={road.roadName}
+                path={road.points}
+                weight={5}
+              />
+            ))}
+            {/* Intersection markers for road highlighting */}
+            {geocodedIntersections.map((intersection, index) => (
+              <IntersectionMarker
+                isVisible={showRoadHighlights}
+                key={`${intersection.road1}-${intersection.road2}-${index}`}
+                label={`${intersection.road1} & ${intersection.road2}`}
+                position={{ lat: intersection.lat, lng: intersection.lng }}
+              />
+            ))}
+          </GoogleMap>
+        </APIProvider>
+
+        {/* Drag overlay */}
+        {isDraggingFile ? (
+          <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-primary/10 backdrop-blur-sm">
+            <div className="rounded-2xl border-2 border-primary border-dashed bg-background/95 p-8 shadow-2xl">
+              <Upload className="mx-auto mb-3 h-12 w-12 text-primary" />
+              <p className="font-medium text-lg">Drop your PDF here</p>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Processing status bar */}
+        {currentStatus ? (
+          <div className="-translate-x-1/2 absolute top-4 left-1/2 z-50">
+            <div className="flex items-center gap-2 rounded-full bg-background/95 px-4 py-2 shadow-lg backdrop-blur">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              <span className="text-sm">{currentStatus}</span>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Floating controls */}
+        {overlayImageUrl ? (
+          <div className="absolute bottom-6 left-6 z-40">
+            <Card className="bg-background/95 p-3 shadow-lg backdrop-blur">
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-4">
+                  <Button
+                    className="gap-2"
+                    onClick={() => setIsOverlayVisible(!isOverlayVisible)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    {isOverlayVisible ? (
+                      <Eye className="h-4 w-4" />
+                    ) : (
+                      <EyeOff className="h-4 w-4" />
+                    )}
+                    {isOverlayVisible ? "Hide" : "Show"}
+                  </Button>
+
+                  <div className="flex items-center gap-2">
+                    <Label className="text-muted-foreground text-xs">
+                      Opacity
+                    </Label>
+                    <input
+                      className="h-1.5 w-24 accent-primary"
+                      max={1}
+                      min={0.1}
+                      onChange={(e) => setOpacity(Number(e.target.value))}
+                      step={0.05}
+                      type="range"
+                      value={opacity}
+                    />
+                    <span className="w-8 text-muted-foreground text-xs">
+                      {Math.round(opacity * 100)}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Map type and road highlighting controls */}
+                <div className="flex items-center gap-2 border-t pt-3">
+                  <Button
+                    className="gap-2"
+                    onClick={() =>
+                      setMapTypeId(
+                        mapTypeId === "roadmap" ? "terrain" : "roadmap"
+                      )
+                    }
+                    size="sm"
+                    variant={mapTypeId === "terrain" ? "default" : "outline"}
+                  >
+                    <MapPin className="h-4 w-4" />
+                    {mapTypeId === "terrain" ? "Terrain" : "Roadmap"}
+                  </Button>
+                  {geocodedIntersections.length > 0 ||
+                  roadPolylines.length > 0 ? (
+                    <Button
+                      className="gap-2"
+                      onClick={() => setShowRoadHighlights(!showRoadHighlights)}
+                      size="sm"
+                      variant={showRoadHighlights ? "default" : "outline"}
+                    >
+                      {showRoadHighlights ? "Hide Roads" : "Show Roads"}
+                    </Button>
+                  ) : null}
+                </div>
+
+                {/* Deep refinement controls */}
+                <div className="flex items-center gap-2 border-t pt-3">
+                  <Button
+                    className="gap-2"
+                    disabled={isProcessing || isDeepRefining}
+                    onClick={handleDeepRefine}
+                    size="sm"
+                    variant="default"
+                  >
+                    {isDeepRefining ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Refining ({deepRefineIteration}/5)
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-4 w-4" />
+                        Deep Refine
+                      </>
+                    )}
+                  </Button>
+                  {isDeepRefining ? (
+                    <span className="text-muted-foreground text-xs">
+                      Matching terrain features...
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </Card>
+          </div>
+        ) : null}
+
+        {/* Panel toggle */}
+        <Button
+          className="absolute top-4 right-4 z-40 shadow-lg"
+          onClick={() => setIsPanelOpen(!isPanelOpen)}
+          size="icon"
+          variant="secondary"
+        >
+          {isPanelOpen ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronLeft className="h-4 w-4" />
+          )}
+        </Button>
+      </div>
+
+      {/* Side Panel */}
+      <div
+        className={`absolute top-0 right-0 bottom-0 z-30 flex w-96 flex-col border-l bg-background transition-all duration-300 md:relative md:translate-x-0 ${isPanelOpen ? "translate-x-0" : "translate-x-full md:hidden"}`}
+      >
+        {/* Header */}
+        <div className="border-b p-4">
+          <h1 className="flex items-center gap-2 font-semibold text-lg">
+            <MapPin className="h-5 w-5 text-primary" />
+            Plan Overlay Tool
+          </h1>
+          <p className="mt-1 text-muted-foreground text-sm">
+            AI-powered construction plan positioning
+          </p>
+        </div>
+
+        {/* Upload Section */}
+        <div className="border-b p-4">
+          {pdfDataUrl ? (
+            <div className="flex items-center justify-between">
+              <div className="flex min-w-0 items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-500" />
+                <span className="truncate text-sm">{fileName}</span>
+              </div>
+              <Button onClick={handleReset} size="sm" variant="ghost">
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <div
+              aria-label="Upload PDF file"
+              className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors hover:border-primary/50 hover:bg-muted/50 ${isDraggingFile ? "border-primary bg-primary/5" : "border-muted-foreground/25"}`}
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  fileInputRef.current?.click();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <Upload className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+              <p className="font-medium">Upload Plan PDF</p>
+              <p className="mt-1 text-muted-foreground text-xs">
+                Click or drag & drop
+              </p>
+            </div>
+          )}
+          <input
+            accept="application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                handleFile(file);
+              }
+              e.target.value = "";
+            }}
+            ref={fileInputRef}
+            type="file"
+          />
+        </div>
+
+        {/* Processing Steps */}
+        {processingSteps.length > 0 ? (
+          <div className="border-b p-4">
+            <div className="space-y-2">
+              {processingSteps.map((step) => (
+                <div className="flex items-center gap-2 text-sm" key={step.id}>
+                  <StepStatusIcon status={step.status} />
+                  <span className={getStepStatusClassName(step.status)}>
+                    {step.label}
+                  </span>
+                  {step.detail ? (
+                    <span className="ml-auto truncate text-muted-foreground text-xs">
+                      {step.detail}
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Messages / AI Assistant */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="border-b bg-muted/30 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <span className="font-medium text-sm">AI Assistant</span>
+                {refinementCount > 0 ? (
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-primary text-xs">
+                    Pass {refinementCount}
+                  </span>
+                ) : null}
+              </div>
+              {pdfDataUrl ? (
+                <Button
+                  className="gap-1.5"
+                  disabled={isProcessing}
+                  onClick={requestRefinement}
+                  size="sm"
+                  variant="outline"
+                >
+                  {isProcessing ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3" />
+                  )}
+                  Refine
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-2 overflow-y-auto p-3">
+            {messages.length === 0 && !isProcessing ? (
+              <div className="py-8 text-center text-muted-foreground text-sm">
+                <Sparkles className="mx-auto mb-2 h-8 w-8 opacity-30" />
+                <p>Upload a plan to start</p>
+                <p className="mt-1 text-xs">
+                  AI will extract location, geocode, and position
+                </p>
+              </div>
+            ) : (
+              <>
+                {messages.map((msg) => (
+                  <div
+                    className={`rounded-lg p-3 text-sm ${getMessageClassName(msg.type)}`}
+                    key={msg.id}
+                  >
+                    <div className="flex items-start gap-2">
+                      <MessageIcon type={msg.type} />
+                      <div className="flex-1">
+                        <p>{msg.content}</p>
+                        {msg.data !== undefined && "confidence" in msg.data ? (
+                          <p className="mt-1 text-muted-foreground text-xs">
+                            Confidence: {Math.round(msg.data.confidence * 100)}%
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Quick Actions */}
+        {pdfDataUrl ? (
+          <div className="border-t bg-muted/30 p-4">
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                className="gap-1.5"
+                onClick={() => setShouldFitBounds(true)}
+                size="sm"
+                variant="outline"
+              >
+                <Move className="h-3 w-3" />
+                Pan to Fit
+              </Button>
+              <Button
+                className="gap-1.5"
+                onClick={() => {
+                  setBounds(DEFAULT_BOUNDS);
+                  setShouldFitBounds(true);
+                }}
+                size="sm"
+                variant="outline"
+              >
+                <Maximize2 className="h-3 w-3" />
+                Reset View
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
