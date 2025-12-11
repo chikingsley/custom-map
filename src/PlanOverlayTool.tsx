@@ -1660,7 +1660,7 @@ export function PlanOverlayTool() {
         <div className="border-b p-4">
           <h1 className="flex items-center gap-2 font-semibold text-lg">
             <MapPin className="h-5 w-5 text-primary" />
-            Plan Overlay Tool
+            Auto Custom Map for Dust Permit
           </h1>
           <p className="mt-1 text-muted-foreground text-sm">
             AI-powered construction plan positioning

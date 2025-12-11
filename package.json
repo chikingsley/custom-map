@@ -1,7 +1,7 @@
 {
-  "name": "plan-overlay-tool",
+  "name": "auto-custom-map-for-dust-permit",
   "version": "1.0.0",
-  "description": "AI-powered tool to overlay construction plans on Google Maps",
+  "description": "AI-powered tool to overlay construction plans on Google Maps for dust permit applications",
   "private": true,
   "type": "module",
   "scripts": {

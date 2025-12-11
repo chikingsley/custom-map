@@ -1435,7 +1435,7 @@ Find matching features (topography contours, parking lots, road shapes, building
   },
 });
 
-console.log(`Plan Overlay Tool running at ${server.url}`);
+console.log(`Auto Custom Map for Dust Permit running at ${server.url}`);
 console.log(`Using primary model: ${GEMINI_PRIMARY_MODEL}`);
 console.log(`Using fast model: ${GEMINI_FAST_MODEL}`);
 console.log("AI SDK: Google GenAI SDK (@google/genai) - Direct integration");

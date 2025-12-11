@@ -1,6 +1,6 @@
-# Plan Overlay Tool
+# Auto Custom Map for Dust Permit
 
-AI-powered tool to overlay construction plans, SWPPP plans, and site plans on Google Maps satellite imagery.
+AI-powered tool to overlay construction plans, SWPPP plans, and site plans on Google Maps satellite imagery for dust permit applications.
 
 ## Features
 
