@@ -1,39 +1,53 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "extends": ["ultracite/core", "ultracite/react"],
+  "files": {
+    "includes": [
+      "src/**",
+      "build.ts",
+      "package.json",
+      "tsconfig.json",
+      "biome.jsonc",
+      "components.json",
+      "!js-genai",
+      "!googleapis",
+      "!_old"
+    ],
+    "ignoreUnknown": true
+  },
   "javascript": {
     "globals": ["Bun", "google"]
   },
-  "linter": {
-    "rules": {
-      "style": {
-        "useFilenamingConvention": "off",
-        "noNonNullAssertion": "off",
-        "noNestedTernary": "warn"
-      },
-      "suspicious": {
-        "noAlert": "warn",
-        "noAssignInExpressions": "off",
-        "useAwait": "warn",
-        "noExplicitAny": "warn"
-      },
-      "a11y": {
-        "noStaticElementInteractions": "off",
-        "noNoninteractiveElementInteractions": "off",
-        "useKeyWithClickEvents": "off",
-        "useSemanticElements": "off"
-      },
-      "complexity": {
-        "noExcessiveCognitiveComplexity": "off"
-      },
-      "performance": {
-        "noNamespaceImport": "off",
-        "useTopLevelRegex": "warn"
-      },
-      "correctness": {
-        "useExhaustiveDependencies": "warn",
-        "noUndeclaredVariables": "warn"
+  "overrides": [
+    {
+      "includes": ["src/components/ui/**"],
+      "linter": {
+        "rules": {
+          "performance": {
+            "noNamespaceImport": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["build.ts"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/server/lib/roads.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noBitwiseOperators": "off"
+          }
+        }
       }
     }
-  }
+  ]
 }

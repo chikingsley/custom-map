@@ -24,5 +24,12 @@
     "noPropertyAccessFromIndexSignature": false,
     "strictNullChecks": true
   },
-  "exclude": ["dist", "node_modules"]
+  "exclude": [
+    "dist",
+    "node_modules",
+    "siteplan-ai-matcher-2",
+    "js-genai",
+    "googleapis",
+    "_old"
+  ]
 }
