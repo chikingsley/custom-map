@@ -1,8 +1,8 @@
----
+- --
 description: Use Bun instead of Node.js, npm, pnpm, or vite.
 globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
 alwaysApply: false
----
+- --
 
 Default to using Bun instead of Node.js.
 
@@ -34,7 +34,8 @@ import { test, expect } from "bun:test";
 test("hello world", () => {
   expect(1).toBe(1);
 });
-```
+
+```text
 
 ## Frontend
 
@@ -71,7 +72,8 @@ Bun.serve({
     console: true,
   }
 })
-```
+
+```text
 
 HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
 
@@ -82,7 +84,8 @@ HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will tr
     <script type="module" src="./frontend.tsx"></script>
   </body>
 </html>
-```
+
+```text
 
 With the following `frontend.tsx`:
 
@@ -100,12 +103,14 @@ export default function Frontend() {
 }
 
 root.render(<Frontend />);
-```
+
+```text
 
 Then, run index.ts
 
 ```sh
 bun --hot ./index.ts
-```
+
+```text
 
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.

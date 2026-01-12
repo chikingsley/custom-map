@@ -5,7 +5,7 @@ API calling the official libraries and SDKs.
 
 Please follow the following guidelines when generating code.
 
-**Official Documentation:** [https://googleapis.github.io/js-genai/](https://googleapis.github.io/js-genai/)
+* *Official Documentation:** [[googleapis.github.io/js-genai](https://googleapis.github.io/js-genai/)](https://googleapis.github.io/js-genai/)
 
 ## Golden Rule: Use the Correct and Current SDK
 
@@ -17,24 +17,24 @@ standard library for all Gemini API interactions (AI Studio and Vertex AI) as of
 - **NPM Package:** `@google/genai`
 - **Legacy Libraries**: (`@google/generative-ai`, `@google-ai/generativelanguage`) are deprecated.
 
-**Installation:**
+* *Installation:**
 
 - **Incorrect:** `npm install @google/generative-ai`
 - **Incorrect:** `npm install @google-ai/generativelanguage`
 - **Correct:** `npm install @google/genai`
 
-**APIs and Usage:**
+* *APIs and Usage:**
 
 - **Incorrect:** `const { GenerativeModel } =
     require('@google/generative-ai')` -> **Correct:** `import { GoogleGenAI }
     from '@google/genai'`
-- **Incorrect:** `const model = genai.getGenerativeModel(...)` -> **Correct:**
+- **Incorrect:**`const model = genai.getGenerativeModel(...)` ->**Correct:**
     `const ai = new GoogleGenAI({apiKey: "..."})`
-- **Incorrect:** `await model.generateContent(...)` -> **Correct:** `await
+- **Incorrect:**`await model.generateContent(...)` ->**Correct:** `await
     ai.models.generateContent(...)`
-- **Incorrect:** `await model.generateContentStream(...)` -> **Correct:**
+- **Incorrect:**`await model.generateContentStream(...)` ->**Correct:**
     `await ai.models.generateContentStream(...)`
-- **Incorrect:** `const generationConfig = { ... }` -> **Correct:** Pass
+- **Incorrect:**`const generationConfig = { ... }` ->**Correct:** Pass
     configuration directly: `config: { safetySettings: [...] }`
 - **Incorrect** `GoogleGenerativeAI`
 - **Incorrect** `google.generativeai`
@@ -44,10 +44,10 @@ standard library for all Gemini API interactions (AI Studio and Vertex AI) as of
 - **Incorrect** `ai.models.getModel`
 - **Incorrect** `ai.models['model_name']`
 - **Incorrect** `generationConfig`
-- **Incorrect** `GoogleGenAIError` -> **Correct** `ApiError`
-- **Incorrect** `GenerateContentResult` -> **Correct**
+- **Incorrect**`GoogleGenAIError` ->**Correct** `ApiError`
+- **Incorrect**`GenerateContentResult` ->**Correct**
     `GenerateContentResponse`.
-- **Incorrect** `GenerateContentRequest` -> **Correct**
+- **Incorrect**`GenerateContentRequest` ->**Correct**
     `GenerateContentParameters`
 
 ## Initialization and API Key
@@ -67,7 +67,8 @@ const ai = new GoogleGenAI({});
 
 // Alternative: explicit key (avoid hardcoding in production)
 // const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-```
+
+```text
 
 ## Models
 
@@ -112,7 +113,8 @@ async function run() {
 }
 
 run();
-```
+
+```text
 
 ## Multimodal Inputs
 
@@ -154,7 +156,8 @@ async function run() {
 }
 
 run();
-```
+
+```text
 
 ### File API (For Large Files)
 
@@ -187,7 +190,8 @@ async function run() {
 }
 
 run();
-```
+
+```text
 
 ## Advanced Capabilities
 
@@ -233,7 +237,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 #### Gemini 2.5
 
@@ -262,7 +267,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 IMPORTANT NOTES:
 
@@ -291,12 +297,13 @@ async function run() {
     console.log(response.text);
 }
 run();
-```
+
+```text
 
 ### Hyperparameters
 
 You can also set `temperature` or `maxOutputTokens` within the `config` object.
-**Avoid** setting `maxOutputTokens`, `topP`, `topK` unless explicitly requested
+* *Avoid** setting `maxOutputTokens`, `topP`, `topK` unless explicitly requested
 by the user.
 
 ### Safety configurations
@@ -336,7 +343,8 @@ async function run() {
     console.log(response.text);
 }
 run();
-```
+
+```text
 
 ### Streaming
 
@@ -358,7 +366,8 @@ async function run() {
   console.log(); // for a final newline
 }
 run();
-```
+
+```text
 
 ### Chat
 
@@ -386,7 +395,8 @@ async function run() {
     }
 }
 run();
-```
+
+```text
 
 It is also possible to use streaming with Chat:
 
@@ -404,7 +414,8 @@ async function run() {
     }
 }
 run();
-```
+
+```text
 
 Note: `ai.chats.create({model})` returns `Chat` under `@google/genai` which tracks
 the session.
@@ -418,39 +429,40 @@ See the available types below that can be used in the `responseSchema`.
 ```javascript
 export enum Type {
   /**
-   *   Not specified, should not be used.
-   */
+    * Not specified, should not be used.
+    * /
   TYPE_UNSPECIFIED = 'TYPE_UNSPECIFIED',
   /**
-   *   OpenAPI string type
-   */
+    * OpenAPI string type
+    * /
   STRING = 'STRING',
   /**
-   *   OpenAPI number type
-   */
+    * OpenAPI number type
+    * /
   NUMBER = 'NUMBER',
   /**
-   *   OpenAPI integer type
-   */
+    * OpenAPI integer type
+    * /
   INTEGER = 'INTEGER',
   /**
-   *   OpenAPI boolean type
-   */
+    * OpenAPI boolean type
+    * /
   BOOLEAN = 'BOOLEAN',
   /**
-   *   OpenAPI array type
-   */
+    * OpenAPI array type
+    * /
   ARRAY = 'ARRAY',
   /**
-   *   OpenAPI object type
-   */
+    * OpenAPI object type
+    * /
   OBJECT = 'OBJECT',
   /**
-   *   Null type
-   */
+    * Null type
+    * /
   NULL = 'NULL',
 }
-```
+
+```text
 
 `Type.OBJECT` cannot be empty; it must contain other properties.
 
@@ -494,7 +506,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 The `response.text` might look like this:
 
@@ -516,7 +529,8 @@ The `response.text` might look like this:
   },
   ...
 ]
-```
+
+```text
 
 ### Function Calling (Tools)
 
@@ -558,7 +572,8 @@ async function run() {
     }
 }
 run();
-```
+
+```text
 
 ### Grounding (Google Search)
 
@@ -589,7 +604,8 @@ async function run() {
     }
 }
 run();
-```
+
+```text
 
 ## Media Generation
 
@@ -623,7 +639,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 Upgrade to the Gemini 3 Pro image (Nano Banana Pro) model if the user requests
 high-resolution images or needs real-time information using the Google Search
@@ -663,7 +680,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 ### Edit Images
 
@@ -702,7 +720,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 ### Video Generation (Veo)
 
@@ -750,7 +769,8 @@ async function main() {
 }
 
 main();
-```
+
+```text
 
 ### Content and Part Hierarchy
 
@@ -773,7 +793,8 @@ async function run() {
     console.log(response.text);
 }
 run();
-```
+
+```text
 
 is effectively a shorthand for this more explicit structure:
 
@@ -794,7 +815,8 @@ async function run() {
     console.log(response.text);
 }
 run();
-```
+
+```text
 
 ## API Errors
 
@@ -805,7 +827,7 @@ run();
 
 The list of APIs and capabilities above are not comprehensive. If users ask you
 to generate code for a capability not provided above, refer them to
-[https://googleapis.github.io/js-genai/](https://googleapis.github.io/js-genai/).
+[[googleapis.github.io/js-genai](https://googleapis.github.io/js-genai/)](https://googleapis.github.io/js-genai/).
 
 ## Useful Links
 

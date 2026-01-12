@@ -138,10 +138,9 @@ describe("Pipeline Integration", () => {
     });
   });
 
-  // Real API tests - skip in CI, run manually
+  // Real API tests
   describe("Live API Integration", () => {
-    // biome-ignore lint/suspicious/noSkippedTests: Expensive test, run manually
-    test.skip("Full pipeline with real PDF", async () => {
+    test("Full pipeline with real PDF", async () => {
       // 1. Upload PDF
       console.log("\n=== STEP 1: Upload PDF ===");
       const pdfFile = await uploadPdfFile(TEST_PDF_PATH);
@@ -188,7 +187,7 @@ describe("Pipeline Integration", () => {
         console.log("\n=== CLEANUP ===");
         await deletePdfFile(pdfFile.name);
       }
-    });
+    }, 120_000); // 2 min timeout for 40MB PDF upload
 
     test("Geocode real address from Sun Health PDF", async () => {
       const result = await geocodeAddress("13550 N 99th Ave, Sun City, AZ");

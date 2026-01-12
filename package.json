@@ -14,7 +14,8 @@
     "lint:fix": "bunx ultracite fix",
     "typecheck": "bun tsc --noEmit",
     "check": "bunx ultracite check",
-    "fix": "bunx ultracite fix"
+    "fix": "bunx ultracite fix",
+    "process-pdf": "bun scripts/process-pdf.ts"
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
@@ -24,9 +25,11 @@
     "@vis.gl/react-google-maps": "^1.7.1",
     "bun-plugin-tailwind": "^0.1.2",
     "class-variance-authority": "^0.7.1",
+    "cli-progress": "^3.12.0",
     "clsx": "^2.1.1",
     "html2canvas": "^1.4.1",
     "lucide-react": "^0.545.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.449",
     "react": "^19",
     "react-dom": "^19",
@@ -35,6 +38,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.3.8",
     "@types/bun": "latest",
+    "@types/cli-progress": "^3.11.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "husky": "^9.1.7",

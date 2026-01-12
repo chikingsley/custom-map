@@ -26,25 +26,29 @@ Create a `.env` file:
 GOOGLE_MAPS_API_KEY=your_maps_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.5-flash  # optional, defaults to gemini-2.5-flash
-```
+
+```text
 
 ### Installation
 
 ```bash
 bun install
-```
+
+```text
 
 ### Development
 
 ```bash
 bun dev
-```
+
+```text
 
 ### Production
 
 ```bash
 bun start
-```
+
+```text
 
 ## How It Works
 
